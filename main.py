@@ -11,16 +11,20 @@ source_pos = [1, 1, 1] # in  meters
 sampling_rate = 16000
 
 absorption = RIR.rt60_to_absorption(room_dim, rt60)
+absorption /= sampling_rate
 
 # mic_positions = [mic_pos1]
 # rir = RIR.do_everything(room_dim, mic_positions, source_pos, rt60)
 # np.save('h.npy', rir)
 rir = np.load('h.npy')
-
-
+num_iter = 50
 vem = vem.VEM(rir, 10**(-8), sampling_rate, 200, absorption)
 
 vfe = vem.vfe()
-print(vfe)
+for i in range(num_iter):
+    print(vem.vfe())
+    vem.update_alpha()
 # plt.plot(rir)
 # plt.show()
+plt.plot(vem.alpha)
+plt.show()
