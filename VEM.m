@@ -268,7 +268,8 @@ classdef VEM < handle
             end
             
         end
-        function updateAlpha(this, mode, num_iter)
+        
+        function [] = updateAlpha(this, mode, num_iter)
             
             if strcmp(mode, 'newton')
                 new_param = this.alpha;
@@ -314,7 +315,7 @@ classdef VEM < handle
                     param = new_param;
                     
                     if max(hessSqrtAlpha(param)) >= 0
-                       new_param = param - gradSqrtAlpha(param)./(-abs(hessSqrtAlpha(param)));
+                       new_param = param - gradSqrtAlpha(param)./hessSqrtAlpha(param);
                     else
                        new_param = param - gradSqrtAlpha(param)./hessSqrtAlpha(param);
                     end
@@ -322,6 +323,16 @@ classdef VEM < handle
                 
                 this.alpha = new_param.^2;
                 
+            end
+            
+            if strcmp(mode, 'dichotomie')
+                new_param = this.alpha;
+                grad = @(x) gradAlpha(x);
+                for i = 1:num_iter
+                    param = new_param;
+                    new_param = this.dichotomie(param, grad, num_iter);
+                end
+                this.alpha = new_param;
             end
             
             function grad = gradAlpha(param)
@@ -378,7 +389,7 @@ classdef VEM < handle
                     gradSqrtParam = gradSqrtBeta(param);
                     hessSqrtParam = hessSqrtBeta(param);
                     if max(hessSqrtParam)>=0 
-                        new_param = param - gradSqrtParam./(-abs(hessSqrtParam));
+                        new_param = param - gradSqrtParam./hessSqrtParam;
                     else
                         new_param = param - gradSqrtParam./hessSqrtParam;   
                     end
@@ -414,6 +425,16 @@ classdef VEM < handle
                 end
                 
                 this.beta = exp(new_param);
+            end
+            
+            if strcmp(mode, 'dichotomie')
+                new_param = this.beta;
+                grad = @(x) gradBeta(x);
+                for i = 1:num_iter
+                    param = new_param;
+                    new_param = this.dichotomie(param, grad, num_iter);
+                end
+                this.beta = new_param;
             end
             
             function grad = gradBeta(param)
@@ -454,8 +475,80 @@ classdef VEM < handle
             this.b = conv(this.PI, this.g, 'full'); 
             this.h_hat = this.e_u.*this.b + randn(this.L_h,1)*this.var_h;
         end
+
+        function new_param = dichotomie(this, param, grad, num_iter)
+            new_param = param;
+            threshold = 2;
+            for i = 1:length(param)
+                [born_inf, born_sup] = this.find_limits(new_param, i, grad, threshold);
+                for j = 1:10
+                    new_born = new_param;
+                    new_born(i) = (born_sup(i) + born_inf(i))/2;
+                    diff = grad(new_born);
+                    if diff(i) < 0
+                        born_sup(i) = (born_sup(i) + born_inf(i))/2;
+                    else
+                        born_inf(i) = (born_sup(i) + born_inf(i))/2;
+                    end
+                end
+                new_param(i) = born_inf(i);
+                
+            end
         
-    end
+        end
+        
+        function born_inf = find_born_inf(this, born_sup, i, grad, threshold)
+            born_inf = born_sup;
+            born_inf(i) = born_sup(i)/threshold;
+            diff = grad(born_inf);
+            while diff(i) > 0
+                born_inf(i) = born_inf(i)/threshold;
+                diff = grad(born_inf);
+            end
+        end
+        
+        function born_sup = find_born_sup(this, start, i, grad, threshold)
+            born_sup = start;
+            born_sup(i) = born_sup(i)*threshold;
+            diff = grad(born_sup);
+            while diff(i) < 0
+                born_sup(i) = born_sup(i)*threshold;
+                diff = grad(born_sup);
+            end               
+        end
+        
+        function [born_inf, born_sup] = find_limits(this, param, k, grad, threshold)
+           param_sup = param;
+           param_sup(k) = param(k)*threshold;
+           param_inf = param;
+           param_inf(k) = param(k)/threshold;
+           grad_param = grad(param);
+           grad_param_sup = grad(param_sup);
+           grad_param_inf = grad(param_inf);
+           
+           if sign(grad_param_sup(k)) == sign(grad_param(k))
+           
+               if abs(grad_param_sup(k)) - abs(grad_param(k)) < 0
+                   born_inf = param;
+                   while sign(grad_param_sup(k)) == sign(grad_param(k))
+                       param_sup(k) = param_sup(k)*threshold;
+                       grad_param_sup = grad(param_sup);
+                   end
+                   born_sup = param_sup;
+               else 
+                   born_sup = param;
+                   while sign(grad_param_inf(k)) == sign(grad_param(k))
+                       param_inf(k) = param_inf(k)/threshold;
+                       grad_param_inf = grad(param_inf);
+                   end
+                   born_inf = param_inf;
+               end
+           else
+                born_sup = param_sup;
+                born_inf = param;
+           end
+        end
     
+    end
 end
 
