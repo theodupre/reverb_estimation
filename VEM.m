@@ -72,7 +72,7 @@ classdef VEM < handle
             if isfield(st_input, 'alpha')
                 this.alpha = st_input.alpha;
             else
-                this.alpha = ones(this.L_h_true,1)*1000;
+                this.alpha = ones(this.L_h_true,1);
             end
             
             if isfield(st_input, 'beta')
@@ -230,31 +230,25 @@ classdef VEM < handle
                 this.g = new_param;
             end
             
-            if strcmp(mode, 'grad')
-                toep_col = flip(this.alpha./this.beta);
-                toep_col2 = flip(this.alpha./(this.beta.^2));
-                diag_term = repmat(this.e_2u, 1, length(this.g)) ;
-                
-                toep_mat = toeplitz([toep_col; zeros(length(this.g)-1,1)], [1, ones(1,length(this.g) - 1)]);
-                toep_mat2 = toeplitz([toep_col2; zeros(length(this.g)-1, 1)], [1, zeros(1,length(this.g)-1)]);
-                
-                M = toep_mat'*(diag_term.*toep_mat) + repmat(toep_mat2'*this.e_2u,1,length(this.g));
-                C = toep_mat'*(this.e_u.*this.h);
-                
-                clear toep_col2 toep_mat diag_term
-                
-                this.g = C\M;
+            if strcmp(mode, 'conv')
+               this.beta_p = this.beta.*exp(this.a*this.v);
+               B = conv(this.h, flip(this.alpha)./flip(this.beta_p), 'full');
+               B = B(1:this.L_g);
+               c = sum(flip(this.alpha)./flip(this.beta_p.^2));
+               gamma = conv(this.alpha./this.beta_p, flip(this.alpha./this.beta_p), 'full');
+               A = c*eye(this.L_g, this.L_g) + toeplitz(gamma(1:this.L_g));
+               this.g_p = (B\A)';
+               this.g = this.g_p.*exp(this.a*(1:this.L_g)');
             end
             
-            if strcmp(mode, 'conv')
-               beta_p = this.beta./(this.e_u(1:this.L_h_true)*this.var_h);
-               B = conv(this.h, flip(this.alpha)./flip(beta_p), 'full');
-               B = B(1:this.L_g);
-               c = sum(flip(this.alpha)./flip(beta_p.^2));
-               gamma = conv(this.alpha./beta_p, flip(this.alpha)./beta_p, 'full');
-               A = c*eye(this.L_g, this.L_g) + toeplitz(gamma(1:this.L_g));
-               g_p = B\A;
-               this.g = g_p'./(this.e_u(1:this.L_g)*this.var_h);
+            if strcmp(mode, 'fourier')
+                fft_size = 2^(nextpow2(length(this.h)));
+                A_B_p = fft(this.alpha./(this.beta.*exp(this.a*this.v)), fft_size);
+                H = fft(this.h, fft_size);
+                c = sum(this.alpha./((this.beta.*exp(this.a*this.v)).^2));
+                G_p = conj(A_B_p).*H./(abs(A_B_p).^2 + c);
+                this.g = ifft(G_p);
+                this.g = this.g(1:this.L_g);
             end
         
             function grad = gradG(param)
@@ -344,6 +338,12 @@ classdef VEM < handle
                 
                 grad = h_term - expect_term - var_term + pi_term;
                 
+%                 h_term = conv(this.e_u.*this.h, flip(this.g), 'full');
+%                 expect_term = conv(this.e_2u.*conv(this.g, param./this.beta, 'full'), flip(this.g), 'full');
+%                 var_term = conv(this.e_2u/2, flip(this.g.^2), 'ful');
+%                 pi_term = (this.lambda.*this.v.^2 - param).*psi(1, param) - this.v./this.beta + 1;
+%                 
+%                 grad = 1./this.beta.*(h_term(this.v) - expect_term(this.v) - 1./this.beta.*var_term(this.v)) + pi_term;
             end
             
             function hess = hessAlpha(param)
@@ -446,6 +446,13 @@ classdef VEM < handle
                 
                 grad = -h_term + expect_term + var_term + pi_term;
                 
+%                 h_term = conv(this.e_u.*this.h, flip(this.g), 'full');
+%                 expect_term = conv(this.e_2u.*conv(this.g, this.alpha./param, 'full'), flip(this.g), 'full');
+%                 var_term =  conv(this.e_2u, flip(this.g.^2), 'full');
+%                 pi_term = -this.lambda.*this.v.^2./param + this.v.*this.alpha./(param.^2);
+%                 
+%                 grad = this.alpha./(param.^2).*(-h_term(this.v) + expect_term(this.v) + 1./param.*var_term(this.v)) + pi_term;
+                
             end
             
             function hess = hessBeta(param)
@@ -478,10 +485,12 @@ classdef VEM < handle
 
         function new_param = dichotomie(this, param, grad, num_iter)
             new_param = param;
+%             paral_param = zeros(size(param));
             threshold = 2;
             for i = 1:length(param)
                 [born_inf, born_sup] = this.find_limits(new_param, i, grad, threshold);
-                for j = 1:10
+                
+                for j = 1:20
                     new_born = new_param;
                     new_born(i) = (born_sup(i) + born_inf(i))/2;
                     diff = grad(new_born);
@@ -491,30 +500,11 @@ classdef VEM < handle
                         born_inf(i) = (born_sup(i) + born_inf(i))/2;
                     end
                 end
+%                 paral_param(i) = born_inf(i);
                 new_param(i) = born_inf(i);
-                
             end
+%             new_param = paral_param;
         
-        end
-        
-        function born_inf = find_born_inf(this, born_sup, i, grad, threshold)
-            born_inf = born_sup;
-            born_inf(i) = born_sup(i)/threshold;
-            diff = grad(born_inf);
-            while diff(i) > 0
-                born_inf(i) = born_inf(i)/threshold;
-                diff = grad(born_inf);
-            end
-        end
-        
-        function born_sup = find_born_sup(this, start, i, grad, threshold)
-            born_sup = start;
-            born_sup(i) = born_sup(i)*threshold;
-            diff = grad(born_sup);
-            while diff(i) < 0
-                born_sup(i) = born_sup(i)*threshold;
-                diff = grad(born_sup);
-            end               
         end
         
         function [born_inf, born_sup] = find_limits(this, param, k, grad, threshold)
@@ -526,15 +516,20 @@ classdef VEM < handle
            grad_param_sup = grad(param_sup);
            grad_param_inf = grad(param_inf);
            
-           if sign(grad_param_sup(k)) == sign(grad_param(k))
+           if sign(grad_param_sup(k)) == sign(grad_param(k)) && sign(grad_param_inf(k)) == sign(grad_param(k))
            
                if abs(grad_param_sup(k)) - abs(grad_param(k)) < 0
                    born_inf = param;
+                   next_param_sup = param_sup;
+                   m = 0;
                    while sign(grad_param_sup(k)) == sign(grad_param(k))
-                       param_sup(k) = param_sup(k)*threshold;
-                       grad_param_sup = grad(param_sup);
+                       m=m+1;
+                       param_sup = next_param_sup;
+                       next_param_sup(k) = param_sup(k)*threshold;
+                       grad_param_sup = grad(next_param_sup);
                    end
-                   born_sup = param_sup;
+                   born_sup = next_param_sup;
+                   born_inf = param_sup;
                else 
                    born_sup = param;
                    while sign(grad_param_inf(k)) == sign(grad_param(k))
@@ -543,11 +538,33 @@ classdef VEM < handle
                    end
                    born_inf = param_inf;
                end
-           else
+           elseif sign(grad_param_sup(k)) ~= sign(grad_param(k))
                 born_sup = param_sup;
                 born_inf = param;
+           else
+               born_sup = param;
+               born_inf = param_inf;
            end
         end
+        
+        function grad = gradBetaTest(this, param)
+                
+            h_term = this.alpha./(param.^2).*conv(this.e_u.*this.h, flip(this.g), 'valid');
+            expect_term = this.alpha./(param.^2).*conv(this.e_2u.*conv(this.g, this.alpha./param, 'full'), flip(this.g), 'valid');
+            var_term =  this.alpha./(param.^3).*conv(this.e_2u, flip(this.g.^2), 'valid');
+            pi_term = -this.lambda.*this.v.^2./param + this.v.*this.alpha./(param.^2);
+
+            grad = -h_term + expect_term + var_term + pi_term;
+
+%                 h_term = conv(this.e_u.*this.h, flip(this.g), 'full');
+%                 expect_term = conv(this.e_2u.*conv(this.g, this.alpha./param, 'full'), flip(this.g), 'full');
+%                 var_term =  conv(this.e_2u, flip(this.g.^2), 'full');
+%                 pi_term = -this.lambda.*this.v.^2./param + this.v.*this.alpha./(param.^2);
+%                 
+%                 grad = this.alpha./(param.^2).*(-h_term(this.v) + expect_term(this.v) + 1./param.*var_term(this.v)) + pi_term;
+
+        end
+
     
     end
 end
